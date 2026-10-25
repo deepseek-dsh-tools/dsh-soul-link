@@ -1,0 +1,7 @@
+# dsh-soul-link bundle patch：只把插件自己插进装配树。
+# 配置不放这里 —— profile 的 cordis.patch.yml 用顶层 `- id: soul-link` + `config:` 覆盖，
+# 默认值在 lib/soul.js 的 SOUL_DEFAULTS（root / codeDir / python / timeoutMs /
+# maxPinnedChars / defaultLimit / sectionName / sectionOrder）。
+- insert:
+    - id: soul-link
+      name: 'dsh-soul-link'

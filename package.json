@@ -1,0 +1,38 @@
+{
+  "name": "dsh-soul-link",
+  "version": "1.0.0",
+  "private": true,
+  "description": "把「念」（AGI 灵魂库）接到 DSH：每轮注入钉住层，并给模型 5 个主动工具（soul_search / soul_write / soul_skill_write / soul_skill_delete / soul_skill_list）—— 2026-10-25 事故后按取证规格重建",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "soul",
+    "memory",
+    "念"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}
