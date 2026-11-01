@@ -144,16 +144,26 @@ check("apply 注册 5 个工具 + soul-pinned 段（order 60）", () => {
 	assert.equal(ctx.sections_()[0].order, 60);
 	for (const tool of ctx.tools_()) assert.equal(typeof tool.execute, "function", `${tool.name} 需要 execute`);
 });
-check("常驻段文本：含库根/钉住正文/目录计数，不含 HTML 注释", () => {
+check("常驻段文本：含库根/L0/L1/目录计数，不含 HTML 注释", () => {
 	const ctx = fakeCtx();
 	apply(ctx, {});
 	const text = ctx.sections_()[0].text();
 	assert.ok(text.includes("## 灵魂库（念）"), "缺标题");
-	assert.ok(text.includes("- 下面是人钉死的"), "缺钉住指引");
+	assert.ok(text.includes("- 库根："), "缺库根");
+	// 2026-11-01：原来断言的是 `- 下面是人钉死的` —— 那句早就不存在了，
+	// 而 SOUL 段加进来后真正的两个小标题是下面两个。断言过期比没有断言更坏：
+	// 它会以「缺钉住指引」的名义红，让人以为是钉住丢了。
+	assert.ok(text.includes("### 我是谁（L0 · SOUL.md）"), "缺 L0（SOUL）段");
+	assert.ok(text.includes("### 必须遵守的（L1 · 钉住）"), "缺 L1（钉住）段");
 	assert.ok(text.includes("目录："), "缺目录计数");
 	assert.ok(text.includes("soul_search"), "缺使用指引");
 	assert.ok(!text.includes("<!--"), "元数据注释不该进上下文");
 	assert.ok(!text.includes("hash:"), "hash 不该进上下文");
+});
+check("已停用的层不再出现在目录清单（人格/、情绪/）", () => {
+	const text = buildResidentLayer(resolveSoulConfig());
+	assert.ok(!text.includes("人格("), "人格/ 已并入 SOUL.md 却还列在目录里");
+	assert.ok(!text.includes("情绪("), "情绪/ 已删除却还列在目录里");
 });
 check("常驻段体量在 L0 预算量级（不顶爆 prompt）", () => {
 	const layer = buildResidentLayer(resolveSoulConfig());
