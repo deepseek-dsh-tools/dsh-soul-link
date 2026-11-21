@@ -144,7 +144,7 @@ check("apply 注册 5 个工具 + soul-pinned 段（order 60）", () => {
 	assert.equal(ctx.sections_()[0].order, 60);
 	for (const tool of ctx.tools_()) assert.equal(typeof tool.execute, "function", `${tool.name} 需要 execute`);
 });
-check("常驻段文本：含库根/L0/L1/目录计数，不含 HTML 注释", () => {
+check("常驻段文本：含库根/L0/目录计数，不含 HTML 注释", () => {
 	const ctx = fakeCtx();
 	apply(ctx, {});
 	const text = ctx.sections_()[0].text();
@@ -154,11 +154,20 @@ check("常驻段文本：含库根/L0/L1/目录计数，不含 HTML 注释", () 
 	// 而 SOUL 段加进来后真正的两个小标题是下面两个。断言过期比没有断言更坏：
 	// 它会以「缺钉住指引」的名义红，让人以为是钉住丢了。
 	assert.ok(text.includes("### 我是谁（L0 · SOUL.md）"), "缺 L0（SOUL）段");
-	assert.ok(text.includes("### 必须遵守的（L1 · 钉住）"), "缺 L1（钉住）段");
+	assert.ok(!text.includes("### 必须遵守的（L1 · 钉住）"), "钉住层已退役（2026-11-19），不该再出现在常驻段");
 	assert.ok(text.includes("目录："), "缺目录计数");
+	assert.ok(text.includes("记忆层 `记忆/{事实,教训,近期}.md`"), "目录提示要写明记忆层新位置");
 	assert.ok(text.includes("soul_search"), "缺使用指引");
 	assert.ok(!text.includes("<!--"), "元数据注释不该进上下文");
 	assert.ok(!text.includes("hash:"), "hash 不该进上下文");
+});
+check("钉住退役后：pinFile 缺失不报错，整段仍渲染（降级不是炸）", () => {
+	// 判据是「缺文件 ⇒ readText 返回空串 ⇒ L1 段不渲染」，不是「缺文件 ⇒ 抛异常」。
+	// 用不存在的库根来证，避免依赖真机上刚删掉的那个文件。
+	assert.equal(readText("D:/___不存在的路径___/x.md"), "", "readText 缺文件必须返回空串");
+	const layer = buildResidentLayer({ ...resolveSoulConfig(), root: "D:/___不存在的路径___" });
+	assert.ok(layer.includes("## 灵魂库（念）"), "库根不存在时也要出骨架，不能抛");
+	assert.ok(!layer.includes("必须遵守的（L1"), "没有钉住文件就不该有 L1 段");
 });
 check("已停用的层不再出现在目录清单（人格/、情绪/）", () => {
 	const text = buildResidentLayer(resolveSoulConfig());
