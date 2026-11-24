@@ -10,8 +10,34 @@
  *     since spawn's stdin is `ignore`).
  */
 import assert from "node:assert/strict";
+import { copyFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import {
+/**
+ * 把 `lib/*.js` 同步到 `test/plugin/lib/`，**在 import 之前**。
+ *
+ * 为什么需要这份副本：`lib/index.js` 里有 `import ... from "@deepseek-ai/dsh-tools"`，
+ * 而那个包只在宿主（app.asar）里，只有 `test/node_modules/` 下有个测试桩。
+ * 放在 `test/plugin/lib/` 才能往上找到桩。把桩放插件根 `node_modules/` 是错的 ——
+ * 宿主加载插件时也会解析到它，等于拿测试桩跑生产。
+ *
+ * 为什么必须**自动**同步：它是手抄快照，2026-11-24 之前从来没人同步过 ——
+ * 结果测试一直在跑 5 个工具的旧版本，`soul_write` 加了 `env` 也没被发现。
+ * 静态 import 会被提升到任何语句之前，所以下面用 `await import`。
+ */
+const here = dirname(fileURLToPath(import.meta.url));
+const libDir = join(here, "..", "lib");
+const copyDir = join(here, "plugin", "lib");
+for (const file of readdirSync(libDir)) {
+	if (!file.endsWith(".js")) continue;
+	const src = join(libDir, file);
+	const dst = join(copyDir, file);
+	if (!existsSync(dst) || readFileSync(src, "utf8") !== readFileSync(dst, "utf8")) copyFileSync(src, dst);
+}
+
+const { apply, createFixMemoryTool, createSearchTool, createSkillWriteTool, createWriteTool, name: pluginName } = await import("./plugin/lib/index.js");
+const {
 	SOUL_DEFAULTS,
 	buildResidentLayer,
 	buildSoulArgv,
@@ -24,8 +50,7 @@ import {
 	runSoul,
 	sliceChars,
 	stripInjectNoise
-} from "./plugin/lib/soul.js";
-import { apply, createSearchTool, createSkillWriteTool, createWriteTool, name as pluginName } from "./plugin/lib/index.js";
+} = await import("./plugin/lib/soul.js");
 
 let pass = 0;
 const failures = [];
@@ -131,13 +156,13 @@ check("describeSoulFailure 退出码 → 人话（含 code 1 = 环境不可达�
 });
 
 // ---------- B. assembly ----------
-check("apply 注册 5 个工具 + soul-pinned 段（order 60）", () => {
+check("apply 注册 6 个工具 + soul-pinned 段（order 60）", () => {
 	const ctx = fakeCtx();
 	apply(ctx, {});
 	assert.equal(pluginName, "soul-link");
 	assert.deepEqual(
 		ctx.tools_().map((tool) => tool.name),
-		["soul_search", "soul_write", "soul_skill_write", "soul_skill_delete", "soul_skill_list"]
+		["soul_search", "soul_write", "soul_fix_memory", "soul_skill_write", "soul_skill_delete", "soul_skill_list"]
 	);
 	assert.equal(ctx.sections_().length, 1);
 	assert.equal(ctx.sections_()[0].name, "soul-pinned");
@@ -185,9 +210,12 @@ check("createResidentRenderer 按 mtime 缓存（同文件返回同一引用）"
 	const second = render();
 	assert.equal(first, second, "未变更时应命中缓存");
 });
-check("soul_write 的 target 只列 facts/lessons（episodes 被 argparse 拒）", () => {
+check("soul_write 的 target 只列 facts/lessons/env（episodes 被 argparse 拒）", () => {
 	const tool = createWriteTool(resolveSoulConfig());
-	assert.deepEqual(tool.parameters.target.enum, ["facts", "lessons"]);
+	// `env` 是 2026-11-21 加的（可核对的环境事实 → 记忆/家庭/环境.md）。
+	// 这条断言之前一直写着两项 —— 因为它读的是 test/plugin/lib 那份**旧快照**，
+	// 快照没同步过，所以真实的第三项从没被检查到。
+	assert.deepEqual(tool.parameters.target.enum, ["facts", "lessons", "env"]);
 	assert.equal(tool.parameters.content.required, true);
 });
 check("soul_search 空 query 直接提示（不 spawn）", async () => {
@@ -276,6 +304,76 @@ await checkAsync("★ 技能闭环：skill-write --file 写入 → skills-list �
 			dir.rmSync(tmp, { recursive: true, force: true });
 		} catch {
 			/* ignore */
+		}
+	}
+});
+
+// ---------- soul_fix_memory（注入的记忆是错的 ⇒ 修它或删它） ----------
+await checkAsync("soul_fix_memory：id 不是 8 位 hex 直接提示（不 spawn）", async () => {
+	const tool = createFixMemoryTool(resolveSoulConfig({ python: "X:/definitely-missing.exe" }));
+	const out = await tool.execute({ id: "exp-u3d-11", action: "forget", evidence: "x" }, {});
+	assert.match(out, /8 位小写 hex/);
+});
+await checkAsync("soul_fix_memory：没有 evidence 直接拒（不 spawn）", async () => {
+	const tool = createFixMemoryTool(resolveSoulConfig({ python: "X:/definitely-missing.exe" }));
+	const out = await tool.execute({ id: "a7ec2eba", action: "forget", evidence: "  " }, {});
+	assert.match(out, /必须给 evidence/);
+});
+await checkAsync("soul_fix_memory：amend 的正文必须以【标题】开头", async () => {
+	const tool = createFixMemoryTool(resolveSoulConfig({ python: "X:/definitely-missing.exe" }));
+	const out = await tool.execute({ id: "a7ec2eba", action: "amend", evidence: "`x` exit 0", content: "没有标题" }, {});
+	assert.match(out, /【症状式标题】/);
+});
+await checkAsync("真引擎：写→forget 真的没了；写→amend 正文被就地换掉", async () => {
+	// 全程临时库，不碰 D:/用户/念。
+	const dir = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const tmp = dir.mkdtempSync(path.join(os.tmpdir(), "soul-fix-memory-"));
+	const cfg = resolveSoulConfig({ root: tmp });
+	const ev = "`node test/run-verify.mjs` exit 0";
+	const idOf = (out) => {
+		const m = /id=([0-9a-f]{8})/.exec(out);
+		assert.ok(m, `写库输出里应有 id：${out.slice(0, 200)}`);
+		return m[1];
+	};
+	try {
+		const init = await runSoul(cfg, ["init", "--root", tmp], {});
+		assert.equal(init.ok, true, `init 应成功：${init.out.slice(0, 200)}`);
+
+		// ① forget 走通
+		const w1 = await runSoul(cfg, ["write", "【临时条目甲】验证 forget 用", "--target", "lessons", "--domain", "代码", "--root", tmp, "--index"], {});
+		assert.equal(w1.ok, true, w1.out.slice(0, 300));
+		const id1 = idOf(w1.stdout ?? w1.out);
+		const tool = createFixMemoryTool(cfg);
+		const out1 = await tool.execute({ id: id1, action: "forget", evidence: ev, reason: "测试" }, {});
+		assert.match(out1, /已删除/, `应报已删除：${out1.slice(0, 300)}`);
+		const after1 = await runSoul(cfg, ["search", "验证 forget 用", "--root", tmp, "--json"], {});
+		assert.ok(!String(after1.out).includes(id1), "删掉的条目不该还被搜到");
+
+		// ② amend 走通：id 不变，正文换掉
+		const w2 = await runSoul(cfg, ["write", "【临时条目乙】验证 amend 之前", "--target", "lessons", "--domain", "代码", "--root", tmp, "--index"], {});
+		assert.equal(w2.ok, true, w2.out.slice(0, 300));
+		const id2 = idOf(w2.stdout ?? w2.out);
+		const out2 = await tool.execute({ id: id2, action: "amend", content: "【临时条目乙】验证 amend 之后", evidence: ev }, {});
+		assert.match(out2, /已改正文/, `应报已改正文：${out2.slice(0, 300)}`);
+		const body = readFileSync(join(tmp, "记忆", "教训", "代码.md"), "utf8");
+		assert.ok(body.includes("验证 amend 之后"), "amend 之后应看到新正文");
+		assert.ok(!body.includes("验证 amend 之前"), "amend 之后不该还留着旧正文");
+		assert.ok(body.includes(id2), "amend 是就地改，id 不该变");
+
+		// ③ 守卫：没有可核对出处的删，引擎必须拒（工具要把拒绝理由原样带回来）
+		const w3 = await runSoul(cfg, ["write", "【临时条目丙】验证守卫", "--target", "lessons", "--domain", "代码", "--root", tmp, "--index"], {});
+		const id3 = idOf(w3.stdout ?? w3.out);
+		const out3 = await tool.execute({ id: id3, action: "forget", evidence: "我确认它错了" }, {});
+		assert.match(out3, /拒绝删除|出处/, `没出处必须被拒：${out3.slice(0, 300)}`);
+		const still = await runSoul(cfg, ["search", "验证守卫", "--root", tmp, "--json"], {});
+		assert.ok(String(still.out).includes(id3), "被拒的删不该生效");
+	} finally {
+		try {
+			dir.rmSync(tmp, { recursive: true, force: true });
+		} catch {
+			/* Windows 上句柄偶尔晚释放，清不掉不影响判据 */
 		}
 	}
 });
