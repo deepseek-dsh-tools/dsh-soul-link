@@ -36,7 +36,7 @@ for (const file of readdirSync(libDir)) {
 	if (!existsSync(dst) || readFileSync(src, "utf8") !== readFileSync(dst, "utf8")) copyFileSync(src, dst);
 }
 
-const { apply, createFixMemoryTool, createSearchTool, createSkillWriteTool, createWriteTool, name: pluginName } = await import("./plugin/lib/index.js");
+const { apply, createFixMemoryTool, createSearchTool, createSkillWriteTool, createUnrelatedTool, createWriteTool, name: pluginName } = await import("./plugin/lib/index.js");
 const {
 	SOUL_DEFAULTS,
 	buildResidentLayer,
@@ -156,13 +156,13 @@ check("describeSoulFailure 退出码 → 人话（含 code 1 = 环境不可达�
 });
 
 // ---------- B. assembly ----------
-check("apply 注册 6 个工具 + soul-pinned 段（order 60）", () => {
+check("apply 注册 7 个工具 + soul-pinned 段（order 60）", () => {
 	const ctx = fakeCtx();
 	apply(ctx, {});
 	assert.equal(pluginName, "soul-link");
 	assert.deepEqual(
 		ctx.tools_().map((tool) => tool.name),
-		["soul_search", "soul_write", "soul_fix_memory", "soul_skill_write", "soul_skill_delete", "soul_skill_list"]
+		["soul_search", "soul_write", "soul_fix_memory", "soul_unrelated", "soul_skill_write", "soul_skill_delete", "soul_skill_list"]
 	);
 	assert.equal(ctx.sections_().length, 1);
 	assert.equal(ctx.sections_()[0].name, "soul-pinned");
@@ -374,6 +374,54 @@ await checkAsync("真引擎：写→forget 真的没了；写→amend 正文被�
 			dir.rmSync(tmp, { recursive: true, force: true });
 		} catch {
 			/* Windows 上句柄偶尔晚释放，清不掉不影响判据 */
+		}
+	}
+});
+
+// ---------- soul_unrelated（这次召回的无关：罚检索，不罚记忆） ----------
+await checkAsync("soul_unrelated：id 不是 8 位 hex 直接提示（不 spawn）", async () => {
+	const tool = createUnrelatedTool(resolveSoulConfig({ python: "X:/definitely-missing.exe" }));
+	const out = await tool.execute({ id: "exp-u3d-11", query: "x" }, {});
+	assert.match(out, /8 位小写 hex/);
+});
+await checkAsync("soul_unrelated：query 为空直接提示（不 spawn）", async () => {
+	const tool = createUnrelatedTool(resolveSoulConfig({ python: "X:/definitely-missing.exe" }));
+	const out = await tool.execute({ id: "a7ec2eba", query: "   " }, {});
+	assert.match(out, /必须给 query/);
+});
+await checkAsync("★ 真引擎：判无关累到 2 个不同查询，回话就该变成「该改标题」", async () => {
+	// 这是「记账 → 立刻回读 → 给结论」那条回路的端到端证明。
+	// 没有它，unrelated 就只是个没人看的账本（2026-11-24 之前它正是 0 行）。
+	const dir = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const tmp = dir.mkdtempSync(path.join(os.tmpdir(), "soul-unrelated-"));
+	const cfg = resolveSoulConfig({ root: tmp });
+	try {
+		const init = await runSoul(cfg, ["init", "--root", tmp], {});
+		assert.equal(init.ok, true, init.out.slice(0, 200));
+		const w = await runSoul(cfg, ["write", "【标题写得很泛的条目】正文其实只讲 A", "--target", "lessons", "--domain", "代码", "--root", tmp, "--index"], {});
+		assert.equal(w.ok, true, w.out.slice(0, 300));
+		const id = /id=([0-9a-f]{8})/.exec(w.stdout ?? w.out)[1];
+
+		const tool = createUnrelatedTool(cfg);
+		const one = await tool.execute({ id, query: "完全无关的问题甲" }, {});
+		assert.match(one, /已记录/, `第一笔应记下：${one.slice(0, 300)}`);
+		assert.match(one, /1 个查询/, `应回报累计 1 个查询：${one.slice(0, 400)}`);
+		assert.ok(!/改标题（别删/.test(one), "只 1 个查询时不该催改标题（可能只是查询没对准）");
+
+		const two = await tool.execute({ id, query: "完全无关的问题乙" }, {});
+		assert.match(two, /2 个不同查询下判无关/, `第二个查询后应变成该改标题：${two.slice(0, 400)}`);
+		assert.match(two, /amend/, "应指出用 amend 改标题");
+
+		// 同一条查询记两次不该算成 2 —— 否则「多问几遍同一个问题」就能把记忆逼成改标题
+		const again = await tool.execute({ id, query: "完全无关的问题乙" }, {});
+		assert.match(again, /2 个不同查询/, `重复同一个查询不该继续加数：${again.slice(0, 400)}`);
+	} finally {
+		try {
+			dir.rmSync(tmp, { recursive: true, force: true });
+		} catch {
+			/* ignore */
 		}
 	}
 });
